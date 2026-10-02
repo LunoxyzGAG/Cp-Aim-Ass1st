@@ -1,0 +1,332 @@
+-- DHEN AIM ASSIST + GOOD GRAPHICS
+-- No GUI | Auto ON | T = Switch Target
+-- LocalScript: StarterPlayer > StarterPlayerScripts
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- SETTINGS
+local FOV_RADIUS = 100
+local AIM_STRENGTH = 0.14
+local MAX_DISTANCE = 300
+
+local TEAM_CHECK = true
+local WALL_CHECK = true
+
+local targetPlayer = nil
+local targetIndex = 1
+
+--==================================================
+-- GOOD GRAPHICS
+--==================================================
+
+Lighting.GlobalShadows = true
+Lighting.Brightness = 2
+Lighting.ExposureCompensation = 0.05
+Lighting.EnvironmentDiffuseScale = 0.85
+Lighting.EnvironmentSpecularScale = 0.8
+Lighting.ClockTime = 14
+Lighting.FogStart = 0
+Lighting.FogEnd = 100000
+
+local atmosphere = Lighting:FindFirstChild("DhenAtmosphere")
+
+if not atmosphere then
+	atmosphere = Instance.new("Atmosphere")
+	atmosphere.Name = "DhenAtmosphere"
+	atmosphere.Parent = Lighting
+end
+
+atmosphere.Density = 0.02
+atmosphere.Haze = 0.05
+atmosphere.Glare = 0
+atmosphere.Offset = 0
+
+local color = Lighting:FindFirstChild("DhenColor")
+
+if not color then
+	color = Instance.new("ColorCorrectionEffect")
+	color.Name = "DhenColor"
+	color.Parent = Lighting
+end
+
+color.Brightness = 0.02
+color.Contrast = 0.10
+color.Saturation = 0.06
+
+local bloom = Lighting:FindFirstChild("DhenBloom")
+
+if not bloom then
+	bloom = Instance.new("BloomEffect")
+	bloom.Name = "DhenBloom"
+	bloom.Parent = Lighting
+end
+
+bloom.Intensity = 0.08
+bloom.Size = 16
+bloom.Threshold = 1.2
+
+local sun = Lighting:FindFirstChild("DhenSunRays")
+
+if not sun then
+	sun = Instance.new("SunRaysEffect")
+	sun.Name = "DhenSunRays"
+	sun.Parent = Lighting
+end
+
+sun.Intensity = 0.025
+sun.Spread = 0.8
+
+--==================================================
+-- CHARACTER HELPERS
+--==================================================
+
+local function getHead(plr)
+	local character = plr and plr.Character
+	local humanoid = character
+		and character:FindFirstChildOfClass("Humanoid")
+	local head = character and character:FindFirstChild("Head")
+
+	if humanoid and humanoid.Health > 0 and head then
+		return head
+	end
+
+	return nil
+end
+
+--==================================================
+-- WALL CHECK
+--==================================================
+
+local function isVisible(character, head)
+	if not WALL_CHECK then
+		return true
+	end
+
+	local origin = camera.CFrame.Position
+	local direction = head.Position - origin
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = {
+		player.Character
+	}
+
+	local result = workspace:Raycast(
+		origin,
+		direction,
+		params
+	)
+
+	return result ~= nil
+		and result.Instance:IsDescendantOf(character)
+end
+
+--==================================================
+-- FIND VALID TARGETS
+--==================================================
+
+local function getCandidates()
+	local candidates = {}
+
+	local viewport = camera.ViewportSize
+	local center = Vector2.new(
+		viewport.X / 2,
+		viewport.Y / 2
+	)
+
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other == player then
+			continue
+		end
+
+		if TEAM_CHECK and other.Team == player.Team then
+			continue
+		end
+
+		local head = getHead(other)
+
+		if not head then
+			continue
+		end
+
+		local distance = (
+			head.Position - camera.CFrame.Position
+		).Magnitude
+
+		if distance > MAX_DISTANCE then
+			continue
+		end
+
+		local screenPos, onScreen =
+			camera:WorldToViewportPoint(head.Position)
+
+		if not onScreen then
+			continue
+		end
+
+		local screenDistance = (
+			Vector2.new(screenPos.X, screenPos.Y) - center
+		).Magnitude
+
+		if screenDistance > FOV_RADIUS then
+			continue
+		end
+
+		if not isVisible(other.Character, head) then
+			continue
+		end
+
+		table.insert(candidates, {
+			player = other,
+			distance = screenDistance
+		})
+	end
+
+	table.sort(candidates, function(a, b)
+		return a.distance < b.distance
+	end)
+
+	return candidates
+end
+
+--==================================================
+-- SELECT TARGET
+--==================================================
+
+local function selectTarget()
+	local candidates = getCandidates()
+
+	if #candidates == 0 then
+		targetPlayer = nil
+		targetIndex = 1
+		return
+	end
+
+	targetIndex = math.clamp(targetIndex, 1, #candidates)
+	targetPlayer = candidates[targetIndex].player
+end
+
+--==================================================
+-- SWITCH TARGET
+--==================================================
+
+local function switchTarget()
+	local candidates = getCandidates()
+
+	if #candidates == 0 then
+		targetPlayer = nil
+		targetIndex = 1
+		return
+	end
+
+	local currentIndex = nil
+
+	for index, entry in ipairs(candidates) do
+		if entry.player == targetPlayer then
+			currentIndex = index
+			break
+		end
+	end
+
+	if currentIndex then
+		targetIndex = (currentIndex % #candidates) + 1
+	else
+		targetIndex = 1
+	end
+
+	targetPlayer = candidates[targetIndex].player
+end
+
+--==================================================
+-- SWITCH KEY: T
+--==================================================
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then
+		return
+	end
+
+	if input.KeyCode == Enum.KeyCode.T then
+		switchTarget()
+	end
+end)
+
+--==================================================
+-- AIM ASSIST: AUTOMATIC ON
+--==================================================
+
+selectTarget()
+
+RunService:BindToRenderStep(
+	"DhenAimAssist",
+	Enum.RenderPriority.Camera.Value + 1,
+	function()
+		if not targetPlayer or not getHead(targetPlayer) then
+			selectTarget()
+		end
+
+		local head = getHead(targetPlayer)
+
+		if not head then
+			return
+		end
+
+		local character = targetPlayer.Character
+
+		local distance = (
+			head.Position - camera.CFrame.Position
+		).Magnitude
+
+		if distance > MAX_DISTANCE
+			or not isVisible(character, head) then
+			selectTarget()
+			return
+		end
+
+		local screenPos, onScreen =
+			camera:WorldToViewportPoint(head.Position)
+
+		if not onScreen then
+			selectTarget()
+			return
+		end
+
+		local center = Vector2.new(
+			camera.ViewportSize.X / 2,
+			camera.ViewportSize.Y / 2
+		)
+
+		local screenDistance = (
+			Vector2.new(screenPos.X, screenPos.Y) - center
+		).Magnitude
+
+		if screenDistance > FOV_RADIUS then
+			selectTarget()
+			return
+		end
+
+		local desiredCFrame = CFrame.lookAt(
+			camera.CFrame.Position,
+			head.Position
+		)
+
+		camera.CFrame = camera.CFrame:Lerp(
+			desiredCFrame,
+			AIM_STRENGTH
+		)
+	end
+)
+
+--==================================================
+-- CLEANUP
+--==================================================
+
+script.Destroying:Connect(function()
+	RunService:UnbindFromRenderStep("DhenAimAssist")
+end)
